@@ -1,0 +1,96 @@
+"""
+Simple Flask backend for the Juned Shaikh / O2 Designs portfolio site.
+
+- Serves the site's HTML page.
+- Accepts contact form submissions at POST /contact and stores them
+  in a local SQLite database (contacts.db), created automatically.
+- Exposes GET /contacts (for the site owner) to view submissions as JSON.
+
+Run:
+    pip install flask --break-system-packages
+    python app.py
+
+Then visit http://localhost:5000
+"""
+
+from flask import Flask, request, jsonify, send_from_directory, abort
+import sqlite3
+import os
+from datetime import datetime
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "contacts.db")
+SITE_FILE = "juned-shaikh.html"  # the HTML page this app serves
+
+app = Flask(__name__)
+
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS contacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+
+@app.route("/")
+def home():
+    """Serve the portfolio page."""
+    if not os.path.exists(os.path.join(BASE_DIR, SITE_FILE)):
+        abort(404, description=f"{SITE_FILE} not found next to app.py")
+    return send_from_directory(BASE_DIR, SITE_FILE)
+
+
+@app.route("/contact", methods=["POST"])
+def contact():
+    """Accept a contact form submission (JSON or form-encoded)."""
+    data = request.get_json(silent=True) or request.form
+
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip()
+    message = (data.get("message") or "").strip()
+
+    errors = {}
+    if not name:
+        errors["name"] = "Name is required."
+    if not email or "@" not in email:
+        errors["email"] = "A valid email is required."
+    if not message:
+        errors["message"] = "Message is required."
+
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO contacts (name, email, message, created_at) VALUES (?, ?, ?, ?)",
+            (name, email, message, datetime.utcnow().isoformat()),
+        )
+
+    return jsonify({"ok": True, "message": "Thanks — I'll get back to you soon."}), 201
+
+
+@app.route("/contacts")
+def list_contacts():
+    """View all submissions (simple owner-facing endpoint, no auth — add some before deploying)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, name, email, message, created_at FROM contacts ORDER BY id DESC"
+        ).fetchall()
+    return jsonify([dict(row) for row in rows])
+
+
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True, port=5000)
